@@ -1,0 +1,99 @@
+# ==========================================
+# PYTHON & BACKEND CORE
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+.env
+.venv
+.venv*/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing, Type Checking & Quality
+.coverage
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & Databases
+*.log
+*.sqlite3
+*.db
+
+# ==========================================
+# FRONTEND (React/Vite)
+# ==========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm/
+
+# Build outputs
+frontend/dist/
+frontend/build/
+
+# Local Environment Variables
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ==========================================
+# PROJECT SPECIFIC
+# ==========================================
+# Generated Synthetic Data
+outputs/
+data/
+temp/
+
+# Large media files (Keep README assets, ignore raw recordings)
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# ==========================================
+# IDE & SYSTEM
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+

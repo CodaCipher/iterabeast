@@ -1,0 +1,178 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 120 100% 3%;
+    --foreground: 120 100% 80%;
+    --card: 120 100% 5%;
+    --card-foreground: 120 100% 85%;
+    --popover: 120 100% 5%;
+    --popover-foreground: 120 100% 85%;
+    --muted: 120 100% 8%;
+    --muted-foreground: 120 100% 60%;
+    --accent: 180 100% 60%;
+    --accent-foreground: 120 100% 3%;
+    --destructive: 0 100% 70%;
+    --destructive-foreground: 120 100% 3%;
+    --border: 120 100% 15%;
+    --input: 120 100% 8%;
+    --ring: 180 100% 60%;
+    --radius: 0.25rem;
+    --primary: 120 100% 70%;
+    --primary-foreground: 120 100% 3%;
+    --secondary: 120 100% 10%;
+    --secondary-foreground: 120 100% 85%;
+    --nerv-red: 0 100% 60%;
+    --nerv-orange: 30 100% 60%;
+    --terminal-green: 120 100% 70%;
+    --terminal-cyan: 180 100% 60%;
+  }
+
+  [data-theme="eva-01"] {
+    /* EVA-01 Palette */
+    /* Deep Purple Backgrounds */
+    --background: 265 50% 5%;
+    --card: 265 50% 8%;
+    --border: 265 50% 20%;
+    --input: 265 50% 10%;
+    
+    /* Neon Green Text (Eyes/Details) */
+    --terminal-green: 120 100% 60%; 
+    --primary: 120 100% 60%;
+    --foreground: 120 100% 80%;
+    
+    /* EVA Purple (Armor) */
+    --terminal-cyan: 270 100% 65%; /* Replaces Cyan with Purple */
+    --accent: 270 100% 65%;
+    
+    /* Orange/Red Details */
+    --nerv-red: 25 100% 55%; /* More Orange-ish Red */
+    --nerv-orange: 35 100% 60%;
+    
+    /* Adjust opacity vars if needed */
+    --muted: 265 30% 15%;
+  }
+
+  .dark {
+    --background: 120 100% 3%;
+    --foreground: 120 100% 80%;
+    --card: 120 100% 5%;
+    --card-foreground: 120 100% 85%;
+    --popover: 120 100% 5%;
+    --popover-foreground: 120 100% 85%;
+    --muted: 120 100% 8%;
+    --muted-foreground: 120 100% 60%;
+    --accent: 180 100% 60%;
+    --accent-foreground: 120 100% 3%;
+    --destructive: 0 100% 70%;
+    --destructive-foreground: 120 100% 3%;
+    --border: 120 100% 15%;
+    --input: 120 100% 8%;
+    --ring: 180 100% 60%;
+    --radius: 0.25rem;
+    --primary: 120 100% 70%;
+    --primary-foreground: 120 100% 3%;
+    --secondary: 120 100% 10%;
+    --secondary-foreground: 120 100% 85%;
+    --nerv-red: 0 100% 60%;
+    --nerv-orange: 30 100% 60%;
+    --terminal-green: 120 100% 70%;
+    --terminal-cyan: 180 100% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    letter-spacing: 0.05em;
+    line-height: 1.6;
+  }
+
+  /* Text Selection Styles */
+  ::selection {
+    background-color: hsl(var(--terminal-green));
+    color: hsl(var(--background));
+    text-shadow: none;
+  }
+
+  [data-theme="eva-01"] ::selection {
+    background-color: hsl(var(--terminal-cyan));
+    color: hsl(var(--background));
+    text-shadow: none;
+  }
+
+  
+  /* Terminal cursor animation */
+  .terminal-cursor::after {
+    content: '█';
+    animation: blink 1s infinite;
+    color: hsl(var(--terminal-green));
+  }
+  
+  @keyframes blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+  
+  /* Terminal text effects */
+  .terminal-text {
+    font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+    text-shadow: 0 0 5px hsl(var(--terminal-green) / 0.5);
+  }
+  
+  .nerv-text {
+    font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+    text-shadow: 0 0 8px hsl(var(--nerv-red) / 0.8);
+  }
+}
+
+@layer components {
+  .glass {
+    @apply backdrop-blur-md bg-white/10 border border-white/20;
+  }
+  
+  /* Cyberpunk Scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+    border-left: 1px solid rgba(0, 255, 255, 0.1);
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(0, 255, 255, 0.2);
+    border: 1px solid rgba(0, 255, 255, 0.3);
+    border-radius: 0;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 255, 255, 0.4);
+    box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+  }
+
+  /* EVA-01 Theme override for scrollbar */
+  [data-theme="eva-01"] .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(168, 85, 247, 0.3); /* Purple */
+    border: 1px solid rgba(168, 85, 247, 0.5);
+  }
+  
+  [data-theme="eva-01"] .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(168, 85, 247, 0.6);
+    box-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+  }
+  
+  [data-theme="eva-01"] .custom-scrollbar::-webkit-scrollbar-track {
+    border-left: 1px solid rgba(168, 85, 247, 0.1);
+  }
+}

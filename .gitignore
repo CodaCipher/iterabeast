@@ -79,6 +79,9 @@ outputs/
 data/
 temp/
 
+# External/manual data directories
+../manueldatas/
+
 # Large media files (Keep README assets, ignore raw recordings)
 *.mp4
 *.mov

@@ -138,18 +138,17 @@ class NervLogger:
 
     @staticmethod
     def banner():
-        ascii_banner = pyfiglet.figlet_format("NERV-GEN", font="slant")
+        ascii_banner = pyfiglet.figlet_format("ITERA\nBEAST", font="slant")
         panel = Panel(
             Text(ascii_banner, style="bold red"),
             title="[bold white]SYNTH_DATAGEN_ENGINE[/]",
-            subtitle="[bold cyan]GITShell Protocol v0.4[/]",
+            subtitle="[bold cyan]iterabeast@terminal v0.4[/]",
             border_style="red",
             padding=(1, 2),
             expand=False
         )
         console.print("\n")
         console.print(panel)
-        console.print("[bold red]WARNING:[/] AUTHORIZED ACCESS ONLY. ALL SESSIONS MONITORED.")
         console.print("[dim white]" + "="*80 + "[/]\n")
 
     @staticmethod
@@ -1249,29 +1248,33 @@ async def generate_synthetic_data(request: GenerationRequest):
         if request.stream:
             async def data_generator():
                 log.info(f"Stream open. Dispatching {total_tasks} tasks...", "SYSTEM")
+                tasks = [asyncio.create_task(generate_single(i)) for i in range(total_tasks)]
+                _ok = 0
+                _pstats: Dict[str, int] = {}
                 try:
-                    tasks = [generate_single(i) for i in range(total_tasks)]
-                    results = await asyncio.gather(*tasks)
-                    
-                    _ok = 0
-                    _pstats: Dict[str, int] = {}
-                    for res, err, pmodel in results:
+                    for finished in asyncio.as_completed(tasks):
+                        res, err, pmodel = await finished
                         if res:
                             _ok += 1
                             _pstats[pmodel] = _pstats.get(pmodel, 0) + 1
                             yield res
-                        # Notice: we no longer yield `{"_error": err}`. It is intentionally omitted to keep outputs clean.
-                    
+                        # Errors are counted implicitly via total - ok; we still avoid yielding _error blocks.
+                except Exception as e:
+                    log.error(f"Stream interrupted: {str(e)}", "HALT")
+                finally:
+                    for t in tasks:
+                        if not t.done():
+                            t.cancel()
                     _elapsed = _time.monotonic() - _start_time
                     log.mission_complete(
-                        total=total_tasks, ok=_ok, failed=total_tasks - _ok,
-                        provider_stats=_pstats, elapsed_sec=_elapsed,
+                        total=total_tasks,
+                        ok=_ok,
+                        failed=total_tasks - _ok,
+                        provider_stats=_pstats,
+                        elapsed_sec=_elapsed,
                         output_path=request.output_filename,
                         distribution=request.distribution_strategy,
                     )
-                except Exception as e:
-                    log.error(f"Stream interrupted: {str(e)}", "HALT")
-                    # Do not yield _error to the final output file, but we can stop generation.
             
             return StreamingResponse(data_generator(), media_type="application/x-ndjson")
 

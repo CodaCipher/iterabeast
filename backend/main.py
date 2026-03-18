@@ -434,6 +434,17 @@ class ProviderHandler:
         self.temperature = config.temperature
         self.frequency_penalty = config.frequency_penalty
         self.presence_penalty = config.presence_penalty
+        self._session = None
+    
+    async def _ensure_session(self):
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
+    
+    async def close_session(self):
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
 
     async def generate(self, system_prompt: str, user_prompt: str, sampling_overrides: Optional[Dict[str, float]] = None) -> Tuple[Optional[str], UsageInfo]:
         if self.provider == "ollama":
@@ -463,10 +474,10 @@ class ProviderHandler:
                 options["repeat_penalty"] = max(1.0, 1.05 + overrides["frequency_penalty"])
         if options:
             payload["options"] = options
-        log.model(f"Initiating Ollama sync... ({self.config.model})", self.config.model)
+        log.model(f"Calling Ollama... ({self.config.model})", self.config.model)
         try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.post(url, json=payload, timeout=300) as resp:
+            sess = await self._ensure_session()
+            async with sess.post(url, json=payload, timeout=300) as resp:
                     if resp.status == 200:
                         return (await resp.json()).get("response", "").strip()
                     log.error(f"Ollama reported error code: {resp.status}")
@@ -1465,24 +1476,18 @@ async def generate_synthetic_data(request: GenerationRequest):
 
         if request.stream:
             async def data_generator():
-                log.info(f"Stream open. Dispatching {total_tasks} tasks...", "SYSTEM")
-                tasks = [asyncio.create_task(generate_single(i)) for i in range(total_tasks)]
+                log.info(f"Stream open. Dispatching {total_tasks} tasks sequentially...", "SYSTEM")
                 _ok = 0
                 _pstats: Dict[str, int] = {}
                 try:
-                    for finished in asyncio.as_completed(tasks):
-                        res, err, pmodel = await finished
+                    for i in range(total_tasks):
+                        res, err, pmodel = await generate_single(i)
                         if res:
                             _ok += 1
                             _pstats[pmodel] = _pstats.get(pmodel, 0) + 1
                             yield res
-                        # Errors are counted implicitly via total - ok; we still avoid yielding _error blocks.
                 except Exception as e:
                     log.error(f"Stream interrupted: {str(e)}", "HALT")
-                finally:
-                    for t in tasks:
-                        if not t.done():
-                            t.cancel()
                     _elapsed = _time.monotonic() - _start_time
                     log.mission_complete(
                         total=total_tasks,
@@ -1496,10 +1501,15 @@ async def generate_synthetic_data(request: GenerationRequest):
             
             return StreamingResponse(data_generator(), media_type="application/x-ndjson")
 
-        # Legacy/Batch mode: Parallel execution!
-        log.info(f"Batch mode. Dispatching {total_tasks} tasks...", "SYSTEM")
-        tasks = [generate_single(i) for i in range(total_tasks)]
-        results = await asyncio.gather(*tasks)
+        # Batch mode: Sequential execution for stability
+        log.info(f"Batch mode. Dispatching {total_tasks} tasks sequentially...", "SYSTEM")
+        results = []
+        for i in range(total_tasks):
+            result = await generate_single(i)
+            results.append(result)
+            if (i + 1) % 10 == 0:
+                completed = sum(1 for r in results if r[0] is not None)
+                log.info(f"Progress: {i+1}/{total_tasks} completed ({completed} OK)", "SYSTEM")
         
         generated = 0
         errors = []

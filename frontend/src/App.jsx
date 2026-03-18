@@ -129,6 +129,7 @@ function App() {
   const [openHelp, setOpenHelp] = useState(null) // 'temp', 'freq', 'pres' or null
   const [theme, setTheme] = useState('magi') // 'magi' (default) or 'eva-01'
   const [fileHandle, setFileHandle] = useState(null)
+  const [filePickerSupported, setFilePickerSupported] = useState(false)
   const [hydrated, setHydrated] = useState(false)
   const [fetchedModels, setFetchedModels] = useState({})
   const [showVariationGenerator, setShowVariationGenerator] = useState(false)
@@ -313,6 +314,12 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setFilePickerSupported(Boolean(window.showSaveFilePicker))
+    }
+  }, [])
+
+  useEffect(() => {
     if (!hydrated || typeof window === 'undefined') return
     try {
       localStorage.setItem('sdg_providers', JSON.stringify(providers))
@@ -339,6 +346,10 @@ function App() {
   }
 
   const handleSelectFile = async () => {
+    if (!filePickerSupported) {
+      addTerminalOutput('FILE_PICKER_UNAVAILABLE: Use a Chromium-based browser for direct streaming downloads.', 'warning')
+      return
+    }
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: settings.outputFilename,
@@ -859,8 +870,22 @@ function App() {
                       <div className="space-y-2">
                         <label className="text-[9px] text-terminal-cyan/40 block uppercase tracking-[0.2em] font-bold">
                           Output File
-                          <button onClick={handleSelectFile} className="ml-2 text-terminal-cyan hover:text-white transition-colors opacity-60 hover:opacity-100 uppercase">[BROWSE]</button>
+                          <button
+                            onClick={handleSelectFile}
+                            disabled={!filePickerSupported || isGenerating}
+                            className={cn(
+                              'ml-2 text-terminal-cyan hover:text-white transition-colors opacity-60 hover:opacity-100 uppercase',
+                              (!filePickerSupported || isGenerating) && 'cursor-not-allowed opacity-30 hover:opacity-30'
+                            )}
+                          >
+                            [BROWSE]
+                          </button>
                         </label>
+                        {!filePickerSupported && (
+                          <p className="text-[9px] text-terminal-cyan/40 font-mono">
+                            File streaming requires a Chromium-based browser (Chrome, Edge, Brave).
+                          </p>
+                        )}
                         <TerminalInputField
                           value={settings.outputFilename}
                           onChange={(e) => setSettings(prev => ({ ...prev, outputFilename: e.target.value }))}

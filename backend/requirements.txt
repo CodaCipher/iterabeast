@@ -5,3 +5,4 @@ aiohttp==3.9.1
 python-dotenv==1.0.0
 numpy==1.26.2
 sentence-transformers>=2.3.0
+pyfiglet>=0.8.post1

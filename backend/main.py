@@ -2,10 +2,12 @@ import os
 import json
 import random
 import re
+import math
 import aiohttp
 import asyncio
 import traceback
 import numpy as np
+from collections import deque
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -48,7 +50,7 @@ app.add_middleware(
 # Global constants and config
 EMBEDDING_MODEL = None
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.85"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.82"))
 ENABLE_SIMILARITY_CHECK = os.getenv("ENABLE_SIMILARITY_CHECK", "true").lower() not in {"false", "0", "no"}
 ENABLE_SEMANTIC_VARIATIONS = os.getenv("ENABLE_SEMANTIC_VARIATIONS", "true").lower() not in {"false", "0", "no"}
 SEMANTIC_KEYWORD_THRESHOLD = float(os.getenv("SEMANTIC_KEYWORD_THRESHOLD", "0.35"))
@@ -66,6 +68,13 @@ FORMATTER_SYSTEM_PROMPT = os.getenv(
         "Do not add explanations, markdown, or extra whitespace."
     )
 )
+
+RECENT_DUPLICATE_WINDOW = max(int(os.getenv("RECENT_DUPLICATE_WINDOW", "3")), 0)
+DUPLICATE_TEMP_STEP = float(os.getenv("DUPLICATE_TEMP_STEP", "0.03"))
+DUPLICATE_TEMP_MAX = float(os.getenv("DUPLICATE_TEMP_MAX", "0.12"))
+DUPLICATE_FREQ_STEP = float(os.getenv("DUPLICATE_FREQ_STEP", "0.03"))
+DUPLICATE_FREQ_MAX = float(os.getenv("DUPLICATE_FREQ_MAX", "0.12"))
+DEFAULT_PROVIDER_TEMPERATURE = float(os.getenv("DEFAULT_PROVIDER_TEMPERATURE", "0.8"))
 
 PROMPT_LEAK_PREFIXES = (
     "scenario:",
@@ -378,6 +387,7 @@ class GenerationRequest(BaseModel):
     variations: Optional[List[str]] = None
     variation_similarity_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
     distribution_strategy: str = "round-robin"
+    similarity_threshold: Optional[float] = Field(None, ge=0.0, le=1.0)
 
 class UsageInfo(BaseModel):
     prompt_tokens: int = 0
@@ -390,6 +400,17 @@ class GenerationResponse(BaseModel):
     message: str
     generated_count: int = 0
     errors: List[str] = []
+
+class VariationGenerationRequest(BaseModel):
+    provider_config: ProviderConfig
+    count: int = Field(5, ge=1, le=200)
+    system_prompt: str
+    objective: str
+    existing_variations: List[str] = []
+    variations_prompt: Optional[str] = None
+
+class VariationGenerationResponse(BaseModel):
+    variations: List[str]
 
 # OpenRouter Pricing (per 1M tokens)
 MODEL_PRICING = {
@@ -414,24 +435,34 @@ class ProviderHandler:
         self.frequency_penalty = config.frequency_penalty
         self.presence_penalty = config.presence_penalty
 
-    async def generate(self, system_prompt: str, user_prompt: str) -> Tuple[Optional[str], UsageInfo]:
+    async def generate(self, system_prompt: str, user_prompt: str, sampling_overrides: Optional[Dict[str, float]] = None) -> Tuple[Optional[str], UsageInfo]:
         if self.provider == "ollama":
-            content = await self._ollama(system_prompt, user_prompt)
+            content = await self._ollama(system_prompt, user_prompt, sampling_overrides)
             # Ollama doesn't provide easy token usage in this API call without streaming
             # or extra metadata. We'll estimate or leave as 0 for now as it's free.
             return content, UsageInfo()
         elif self.provider == "openrouter":
-            return await self._openrouter(system_prompt, user_prompt)
+            return await self._openrouter(system_prompt, user_prompt, sampling_overrides)
         elif self.provider == "groq":
-            return await self._groq(system_prompt, user_prompt)
+            return await self._groq(system_prompt, user_prompt, sampling_overrides)
         elif self.provider == "deepinfra":
-            return await self._deepinfra(system_prompt, user_prompt)
+            return await self._deepinfra(system_prompt, user_prompt, sampling_overrides)
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
-    async def _ollama(self, sys, usr):
+    async def _ollama(self, sys, usr, overrides=None):
         url = f"{self.config.base_url or 'http://localhost:11434'}/api/generate"
         payload = {"model": self.config.model, "prompt": usr, "system": sys, "stream": False}
+        options: Dict[str, Any] = {}
+        if overrides:
+            if "temperature" in overrides:
+                options["temperature"] = overrides["temperature"]
+            if "repeat_penalty" in overrides:
+                options["repeat_penalty"] = overrides["repeat_penalty"]
+            elif "frequency_penalty" in overrides:
+                options["repeat_penalty"] = max(1.0, 1.05 + overrides["frequency_penalty"])
+        if options:
+            payload["options"] = options
         log.model(f"Initiating Ollama sync... ({self.config.model})", self.config.model)
         try:
             async with aiohttp.ClientSession() as sess:
@@ -443,7 +474,7 @@ class ProviderHandler:
             log.error(f"Ollama connection failure: {str(e)}")
         return None
 
-    async def _openrouter(self, sys, usr):
+    async def _openrouter(self, sys, usr, overrides=None):
         url = f"{self.config.base_url or 'https://openrouter.ai'}/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
@@ -455,7 +486,11 @@ class ProviderHandler:
         for k in ["temperature", "frequency_penalty", "presence_penalty"]:
             val = getattr(self.config, k)
             if val is not None: payload[k] = val
-        
+        if overrides:
+            for key in ("temperature", "frequency_penalty", "presence_penalty"):
+                if key in overrides:
+                    payload[key] = overrides[key]
+
         log.model(f"Transmitting to OpenRouter uplink... ({self.config.model})", self.config.model)
         try:
             async with aiohttp.ClientSession() as sess:
@@ -488,7 +523,7 @@ class ProviderHandler:
             log.error(f"OpenRouter connection failure: {str(e)}")
         return None, UsageInfo()
 
-    async def _groq(self, sys, usr):
+    async def _groq(self, sys, usr, overrides=None):
         url = f"{self.config.base_url or 'https://api.groq.com/openai/v1'}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
@@ -498,6 +533,10 @@ class ProviderHandler:
         for k in ["temperature", "frequency_penalty", "presence_penalty"]:
             val = getattr(self.config, k)
             if val is not None: payload[k] = val
+        if overrides:
+            for key in ("temperature", "frequency_penalty", "presence_penalty"):
+                if key in overrides:
+                    payload[key] = overrides[key]
         
         log.model(f"Transmitting to Groq API... ({self.config.model})", self.config.model)
         try:
@@ -535,7 +574,7 @@ class ProviderHandler:
                     log.error(f"Groq reported error code: {resp.status} | Body: {body[:300]}")
         except Exception as e:
             log.error(f"Groq connection failure: {str(e)}")
-    async def _deepinfra(self, sys, usr):
+    async def _deepinfra(self, sys, usr, overrides=None):
         url = f"{self.config.base_url or 'https://api.deepinfra.com/v1/openai'}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",
@@ -545,6 +584,10 @@ class ProviderHandler:
         for k in ["temperature", "frequency_penalty", "presence_penalty"]:
             val = getattr(self.config, k)
             if val is not None: payload[k] = val
+        if overrides:
+            for key in ("temperature", "frequency_penalty", "presence_penalty"):
+                if key in overrides:
+                    payload[key] = overrides[key]
         
         log.model(f"Transmitting to DeepInfra API... ({self.config.model})", self.config.model)
         try:
@@ -681,6 +724,12 @@ def extract_user_text(data_obj: dict) -> str:
         print(f"User text extraction error: {exc}")
     return ""
 
+def _strip_keyword_instances(text: str, keyword: str) -> str:
+    if not text or not keyword:
+        return text or ""
+    pattern = re.compile(re.escape(keyword), flags=re.IGNORECASE)
+    return pattern.sub(" ", text)
+
 def user_message_matches_keyword(data_obj: dict, keyword: Optional[str], embedding_model, semantic_variations_enabled, variation_semantic_threshold):
     if not keyword:
         return True, None
@@ -688,19 +737,30 @@ def user_message_matches_keyword(data_obj: dict, keyword: Optional[str], embeddi
         content = extract_user_text(data_obj)
         if not content:
             return False, None
-        if keyword.lower() in content.lower():
-            return True, None
+        literal_present = keyword.lower() in content.lower()
+
         if not semantic_variations_enabled or embedding_model is None:
-            return False, None
-        
+            # Without semantic engine we can only rely on literal inclusion
+            return (literal_present, None)
+
+        comparison_text = content
+        if literal_present:
+            stripped = _strip_keyword_instances(content, keyword).strip()
+            if not stripped:
+                # Content was essentially just the keyword; reject to avoid trivial passes
+                return False, None
+            comparison_text = stripped
+
         keyword_vec = np.asarray(embedding_model.encode([keyword])[0], dtype=np.float32)
-        content_vec = np.asarray(embedding_model.encode([content])[0], dtype=np.float32)
+        content_vec = np.asarray(embedding_model.encode([comparison_text])[0], dtype=np.float32)
         denom = (np.linalg.norm(keyword_vec) * np.linalg.norm(content_vec)) + 1e-8
         if denom == 0:
             return False, None
         sim = float(np.dot(keyword_vec, content_vec) / denom)
         if sim >= variation_semantic_threshold:
-            return True, sim
+            # Require either literal presence or strong semantic alignment
+            if literal_present or not keyword:
+                return True, sim
         return False, sim
     except Exception as exc:
         print(f"Keyword validation error: {exc}")
@@ -737,6 +797,40 @@ def check_similarity(text: str, similarity_enabled, embedding_model, assistant_e
         if sim > max_sim:
             max_sim = sim
     return (max_sim >= SIMILARITY_THRESHOLD, max_sim if max_sim >= 0 else None, vector)
+
+def adjust_sampling_for_duplicate(config: ProviderConfig, duplicate_hits: int) -> Dict[str, float]:
+    """Return gentle sampling overrides when semantic duplicates keep appearing."""
+    overrides: Dict[str, float] = {}
+    if duplicate_hits <= 0:
+        return overrides
+    temp_base = config.temperature if config.temperature is not None else DEFAULT_PROVIDER_TEMPERATURE
+    temp_delta = min(DUPLICATE_TEMP_STEP * duplicate_hits, DUPLICATE_TEMP_MAX)
+    overrides["temperature"] = max(0.1, min(1.5, temp_base + temp_delta))
+
+    freq_base = config.frequency_penalty if config.frequency_penalty is not None else 0.0
+    freq_delta = min(DUPLICATE_FREQ_STEP * duplicate_hits, DUPLICATE_FREQ_MAX)
+    overrides["frequency_penalty"] = freq_base + freq_delta
+    return overrides
+
+def update_recent_buffer(buffer: deque, vector: np.ndarray):
+    if buffer is not None and vector is not None:
+        buffer.append(vector)
+
+def recent_duplicate_check(vector: np.ndarray, buffer: deque, threshold: float) -> Tuple[bool, Optional[float]]:
+    if buffer is None or vector is None or not buffer:
+        return False, None
+    vec_norm = np.linalg.norm(vector) + 1e-8
+    max_sim = -1.0
+    for prev in buffer:
+        denom = (np.linalg.norm(prev) * vec_norm) + 1e-8
+        if denom == 0:
+            continue
+        sim = float(np.dot(prev, vector) / denom)
+        if sim > max_sim:
+            max_sim = sim
+    if max_sim >= threshold:
+        return True, max_sim
+    return False, max_sim if max_sim >= 0 else None
 
 def validate_json_structure(data: dict, item_index: int, attempt: int) -> tuple[bool, Optional[str]]:
     """Validate that the JSON structure is correct.
@@ -1048,6 +1142,104 @@ async def normalize_model_response(text: str, fallback_user_content: str, config
             log.debug(f"Cleaned formatter output: {cleaned[:200]}...", "FORMATTER")
     return None
 
+def _parse_variation_candidates(raw_text: str) -> List[str]:
+    candidates: List[str] = []
+    if not raw_text:
+        return candidates
+
+    # Try JSON first
+    try:
+        data = json.loads(raw_text)
+        if isinstance(data, list):
+            candidates.extend(str(item).strip() for item in data if str(item).strip())
+        elif isinstance(data, dict):
+            maybe_list = data.get("variations") or data.get("keywords")
+            if isinstance(maybe_list, list):
+                candidates.extend(str(item).strip() for item in maybe_list if str(item).strip())
+    except json.JSONDecodeError:
+        pass
+
+    if not candidates:
+        for line in raw_text.splitlines():
+            trimmed = line.strip().strip('-•').strip()
+            if not trimmed:
+                continue
+            # Remove numbering like "1. keyword" or "01) keyword"
+            trimmed = re.sub(r"^\s*\d+[\).:-]?\s*", "", trimmed)
+            if trimmed:
+                candidates.append(trimmed)
+
+    normalized = []
+    seen = set()
+    for item in candidates:
+        clean = item.strip()
+        if not clean:
+            continue
+        lower = clean.lower()
+        if lower not in seen:
+            seen.add(lower)
+            normalized.append(clean)
+    return normalized
+
+@app.post("/api/variations/generate", response_model=VariationGenerationResponse)
+async def generate_variations(request: VariationGenerationRequest):
+    handler = ProviderHandler(request.provider_config)
+    log.info(
+        f"Variation synthesis request via {request.provider_config.provider}::{request.provider_config.model}",
+        "VARIATIONS"
+    )
+
+    existing_lower = {v.strip().lower() for v in request.existing_variations if v.strip()}
+    guidance = request.variations_prompt.strip() if request.variations_prompt else None
+
+    system_prompt = (
+        "You are a tactical variation architect generating concise scenario keywords for an AI data pipeline. "
+        "Return only fresh, creative variation prompts that the model can inject into dialogues."
+    )
+
+    context_lines = [
+        f"Primary Objective: {request.objective.strip()}" if request.objective else None,
+        f"System Instructions Summary: {request.system_prompt.strip()[:1000]}" if request.system_prompt else None,
+        f"Existing Variations (avoid duplicates): {', '.join(request.existing_variations[:50])}" if request.existing_variations else None,
+        f"Additional Guidance: {guidance}" if guidance else None,
+    ]
+    context = "\n".join(filter(None, context_lines))
+
+    user_prompt = (
+        f"Generate {request.count} unique, vivid VARIATION_KEYWORDS that align with the mission.\n"
+        "Rules:\n"
+        "- Output only the keywords, no numbering or explanations.\n"
+        "- Each keyword must be 2-8 words describing a scenario hook or emotional beat.\n"
+        "- Respect the existing list; do NOT repeat anything from it.\n"
+        "- If guidance is provided, weave it into the themes.\n"
+        "- Respond with either a JSON array of strings or newline-separated strings.\n"
+        f"\nMission Context:\n{context}\n"
+    )
+
+    response, _usage = await handler.generate(system_prompt, user_prompt)
+    if not response:
+        log.error("Variation provider returned empty response", "VARIATIONS")
+        raise HTTPException(status_code=502, detail="Provider returned empty response")
+
+    parsed = _parse_variation_candidates(response)
+    filtered = []
+    seen = set(existing_lower)
+    for item in parsed:
+        lower = item.lower()
+        if lower in seen:
+            continue
+        seen.add(lower)
+        filtered.append(item)
+        if len(filtered) >= request.count:
+            break
+
+    if not filtered:
+        log.warn("No usable variation keywords extracted", "VARIATIONS")
+        raise HTTPException(status_code=422, detail="Unable to extract variation keywords from provider response")
+
+    log.success(f"Generated {len(filtered)} variation keywords", "VARIATIONS")
+    return VariationGenerationResponse(variations=filtered)
+
 @app.get("/api/ollama/tags")
 async def get_ollama_tags(base_url: str = "http://localhost:11434"):
     try:
@@ -1089,6 +1281,7 @@ async def generate_synthetic_data(request: GenerationRequest):
         handlers = [ProviderHandler(p) for p in active_providers]
         variation_list = request.variations or []
         var_threshold = request.variation_similarity_threshold or SEMANTIC_KEYWORD_THRESHOLD
+        similarity_threshold = request.similarity_threshold if request.similarity_threshold is not None else SIMILARITY_THRESHOLD
         
         embedding_model = None
         if SENTENCE_TRANSFORMERS_AVAILABLE:
@@ -1100,6 +1293,10 @@ async def generate_synthetic_data(request: GenerationRequest):
                 log.warn(f"Semantic engine offline: {str(e)}")
         
         assistant_embeddings = []
+        recent_assistant_buffers: Dict[str, deque] = {}
+        if RECENT_DUPLICATE_WINDOW > 0 and SENTENCE_TRANSFORMERS_AVAILABLE:
+            for handler in handlers:
+                recent_assistant_buffers[handler.config.id] = deque(maxlen=RECENT_DUPLICATE_WINDOW)
         prompt_refs = {}
         if embedding_model:
             log.info("Generating prompt hash references...", "SYNC")
@@ -1147,6 +1344,7 @@ async def generate_synthetic_data(request: GenerationRequest):
                 
                 max_attempts = 3
                 last_err = "Initial state"
+                duplicate_retry_boost = 0
                 
                 model_short = handler.model.split('/')[-1]
                 kw_display = f"kw={keyword[:25]}..." if keyword and len(keyword) > 25 else (f"kw={keyword}" if keyword else "no-kw")
@@ -1165,13 +1363,19 @@ async def generate_synthetic_data(request: GenerationRequest):
                         
                         if attempt > 1:
                             log.warn(f"#{i+1:>3} retry {attempt}/{max_attempts} → {model_short}", "RETRY")
+                        sampling_overrides = adjust_sampling_for_duplicate(handler.config, duplicate_retry_boost)
+                        if sampling_overrides:
+                            log.debug(
+                                f"#{i+1:>3} RETRY_SAMPLING  Δtemp={sampling_overrides.get('temperature')} Δfreq={sampling_overrides.get('frequency_penalty')}",
+                                "RETRY"
+                            )
                         
                         # Debug: compact single-line debug info on attempt 1
                         if attempt == 1:
                             sys_hash = hash(sys_p)
                             log.debug(f"#{i+1:>3} DBG  sys={len(sys_p)}ch  hash={sys_hash}  usr={usr_p[:80].strip()!r}", "DEBUG")
                         
-                        response, usage = await handler.generate(sys_p, usr_p)
+                        response, usage = await handler.generate(sys_p, usr_p, sampling_overrides or None)
                         if not response:
                             last_err = "Null response from provider"
                             log.warn(f"#{i+1:>3} FAIL  attempt {attempt}: {last_err}", "TASK")
@@ -1224,17 +1428,31 @@ async def generate_synthetic_data(request: GenerationRequest):
                         if ENABLE_SIMILARITY_CHECK and embedding_model and ast_txt:
                             curr_vec = np.asarray(embedding_model.encode([ast_txt])[0], dtype=np.float32)
                             is_dup = False
-                            # We collect embeddings to prevent repetition across the batch
+                            sim = -1.0
                             for prev_vec in assistant_embeddings:
                                 denom = (np.linalg.norm(curr_vec) * np.linalg.norm(prev_vec) + 1e-8)
                                 sim = float(np.dot(curr_vec, prev_vec) / denom)
-                                if sim >= SIMILARITY_THRESHOLD:
+                                if sim >= similarity_threshold:
                                     is_dup = True; break
                             if is_dup:
-                                log.warn(f"#{i+1:>3} DUP   sim={sim:.3f} → rerouting...", "TASK")
+                                log.warn(f"#{i+1:>3} DUP::GLOBAL sim={sim:.3f} → rerouting...", "TASK")
+                                duplicate_retry_boost += 1
                                 last_err = f"Redundancy detected ({sim:.3f})"
                                 continue
+
+                            buffer = recent_assistant_buffers.get(handler.config.id)
+                            recent_dup = False
+                            recent_sim = None
+                            if buffer is not None:
+                                recent_dup, recent_sim = recent_duplicate_check(curr_vec, buffer, similarity_threshold)
+                            if recent_dup:
+                                log.warn(f"#{i+1:>3} DUP::RECENT sim={recent_sim:.3f} → mild resample", "TASK")
+                                duplicate_retry_boost += 1
+                                last_err = f"Recent redundancy ({recent_sim:.3f})"
+                                continue
+
                             assistant_embeddings.append(curr_vec)
+                            update_recent_buffer(buffer, curr_vec)
                         
                         log.success(f"#{i+1:>3} OK    {model_short}  [{kw_display}]", "DONE")
                         return json.dumps(data, ensure_ascii=False) + '\n', None, handler.model

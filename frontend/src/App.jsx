@@ -63,6 +63,7 @@ function App() {
     systemPrompt: 'You are an assistant that generates synthetic data in JSONL format.\n\nIMPORTANT: Every response MUST be exactly one valid JSONL line with this structure:\n{"messages":[{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}\n\nCRITICAL CONSTRAINTS:\n1. DO NOT include any greetings, pleasantries, or preambles (e.g., "Sure!", "Here is the data", "Hello").\n2. DO NOT explain the task or provide any conversational filler.\n3. START IMMEDIATELY with the JSON structure.\n4. Ensure the output is a single line.\n\nSTRUCTURAL VARIETY MANDATE:\nThe "user" content MUST vary its opening structure. DO NOT always start with "I, ...". Use diverse patterns:\n- Direct statements: "The server is down..."\n- Questions: "Why does this API..."\n- Actions: "Running the build script..."\n- Observations: "The logs show a memory leak..."\n- Confessions: "I accidentally deleted the..."\n- Emotional outbursts: "This legacy code is..."\n- Internal conflict: "I can\'t decide between..."\n\nVARIATION DIRECTIVE:\nEach item provides a VARIATION_KEYWORD. The Junior Developer\'s spoken line must naturally include that keyword exactly once. Do NOT reuse keywords between items. No keyword = no output.',
     variations: 'morning routine\nevening activity\nwork situation\nleisure time\nspecial event\ndaily task\nsocial gathering',
     variationThreshold: 0.35,
+    similarityThreshold: 0.82,
     distributionStrategy: 'round-robin',
     formatter: {
       enabled: false,
@@ -130,6 +131,14 @@ function App() {
   const [fileHandle, setFileHandle] = useState(null)
   const [hydrated, setHydrated] = useState(false)
   const [fetchedModels, setFetchedModels] = useState({})
+  const [showVariationGenerator, setShowVariationGenerator] = useState(false)
+  const [variationGeneratorConfig, setVariationGeneratorConfig] = useState({
+    providerId: 'default-ollama',
+    count: 5,
+    prompt: ''
+  })
+  const [isGeneratingVariations, setIsGeneratingVariations] = useState(false)
+  const [recentGeneratedVariations, setRecentGeneratedVariations] = useState([])
 
   const estimateCost = () => {
     const activeProviders = providers.filter(p => p.enabled)
@@ -178,6 +187,90 @@ function App() {
     }
   }
 
+  const handleOpenVariationGenerator = () => {
+    if (!providers.length) {
+      addTerminalOutput('VARIATION_GENERATOR: No providers configured', 'error')
+      return
+    }
+    const currentValid = providers.some(p => p.id === variationGeneratorConfig.providerId)
+    const fallbackProviderId = currentValid
+      ? variationGeneratorConfig.providerId
+      : (activeProviderId && providers.some(p => p.id === activeProviderId) ? activeProviderId : providers[0].id)
+    setVariationGeneratorConfig(prev => ({
+      ...prev,
+      providerId: fallbackProviderId
+    }))
+    setShowVariationGenerator(true)
+  }
+
+  const handleGenerateVariations = async () => {
+    const provider = providers.find(p => p.id === variationGeneratorConfig.providerId)
+    if (!provider) {
+      addTerminalOutput('VARIATION_GENERATOR: Provider not found', 'error')
+      return
+    }
+
+    setIsGeneratingVariations(true)
+    addTerminalOutput(`VARIATION_GENERATOR: Synthesizing ${variationGeneratorConfig.count} keywords via ${provider.name}`, 'info')
+
+    const existingList = parseVariationList(settings.variations)
+
+    const payload = {
+      provider_config: {
+        id: provider.id,
+        name: provider.name,
+        provider: provider.provider,
+        api_key: provider.apiKey || undefined,
+        base_url: provider.baseUrl,
+        model: provider.model,
+        temperature: provider.temperature,
+        frequency_penalty: provider.frequency_penalty,
+        presence_penalty: provider.presence_penalty,
+        enabled: provider.enabled
+      },
+      count: variationGeneratorConfig.count,
+      system_prompt: settings.systemPrompt,
+      objective: settings.objective,
+      existing_variations: existingList,
+      variations_prompt: variationGeneratorConfig.prompt || undefined
+    }
+
+    try {
+      const response = await axios.post('/api/variations/generate', payload)
+      const generated = response.data?.variations || []
+      if (!generated.length) {
+        addTerminalOutput('VARIATION_GENERATOR: Provider returned no keywords', 'warn')
+      } else {
+        const normalizedExisting = new Set(existingList.map(v => v.toLowerCase()))
+        const merged = [...existingList]
+        const fresh = []
+        generated.forEach(item => {
+          const clean = sanitizeVariationKeyword(item)
+          if (!clean) return
+          if (normalizedExisting.has(clean.toLowerCase())) return
+          normalizedExisting.add(clean.toLowerCase())
+          merged.push(clean)
+          fresh.push(clean)
+        })
+        if (!fresh.length) {
+          addTerminalOutput('VARIATION_GENERATOR: All generated keywords were duplicates', 'warn')
+        } else {
+          setSettings(prev => ({
+            ...prev,
+            variations: merged.join('\n')
+          }))
+          setRecentGeneratedVariations(fresh)
+          addTerminalOutput(`VARIATION_GENERATOR: Added ${fresh.length} new keywords`, 'success')
+        }
+      }
+    } catch (error) {
+      const message = error.response?.data?.detail || error.message
+      addTerminalOutput(`VARIATION_GENERATOR ERROR: ${message}`, 'error')
+    } finally {
+      setIsGeneratingVariations(false)
+    }
+  }
+
   const estimatedCost = estimateCost();
 
   useEffect(() => {
@@ -202,6 +295,16 @@ function App() {
         const parsed = JSON.parse(savedSettings)
         setSettings(prev => ({ ...prev, ...parsed }))
       }
+
+      const savedVariationGenerator = localStorage.getItem('sdg_variation_generator')
+      if (savedVariationGenerator) {
+        const parsed = JSON.parse(savedVariationGenerator)
+        setVariationGeneratorConfig(prev => ({
+          ...prev,
+          ...parsed,
+          prompt: typeof parsed?.prompt === 'string' ? parsed.prompt : ''
+        }))
+      }
     } catch (err) {
       console.warn('Failed to load settings from localStorage', err)
     } finally {
@@ -221,13 +324,15 @@ function App() {
         systemPrompt: settings.systemPrompt,
         variations: settings.variations,
         variationThreshold: settings.variationThreshold,
+        similarityThreshold: settings.similarityThreshold,
         distributionStrategy: settings.distributionStrategy,
         formatter: settings.formatter
       }))
+      localStorage.setItem('sdg_variation_generator', JSON.stringify(variationGeneratorConfig))
     } catch (err) {
       console.warn('Failed to persist settings', err)
     }
-  }, [hydrated, providers, activeProviderId, settings])
+  }, [hydrated, providers, activeProviderId, settings, variationGeneratorConfig])
 
   const handleSettingsChange = (newSettings) => {
     setSettings(newSettings)
@@ -272,6 +377,27 @@ function App() {
     } finally {
       setIsLoadingModels(false)
     }
+  }
+
+  const parseVariationList = (text) => {
+    return text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+  }
+
+  const sanitizeVariationKeyword = (value = '') => {
+    let cleaned = value.trim()
+    // Remove wrapping quotes/backticks repeatedly
+    while (cleaned.length > 1 && ((cleaned.startsWith('"') && cleaned.endsWith('"')) || (cleaned.startsWith('\'') && cleaned.endsWith('\'')) || (cleaned.startsWith('`') && cleaned.endsWith('`')))) {
+      cleaned = cleaned.slice(1, -1).trim()
+    }
+    cleaned = cleaned.replace(/^['"`]+/, '').replace(/['"`]+$/, '')
+    cleaned = cleaned.replace(/^[-•\s]+/, '')
+    cleaned = cleaned.replace(/[\s]+/g, ' ')
+    cleaned = cleaned.replace(/^[“”]+|[“”]+$/g, '')
+    if (cleaned.endsWith(',')) cleaned = cleaned.slice(0, -1).trim()
+    return cleaned
   }
 
   const handleCommand = async (command) => {
@@ -394,6 +520,7 @@ function App() {
         stream: !!fileHandle,
         variations: variationList,
         variation_similarity_threshold: settings.variationThreshold,
+        similarity_threshold: settings.similarityThreshold,
         distribution_strategy: settings.distributionStrategy || 'round-robin',
         formatter_config: settings.formatter.enabled ? {
           enabled: true,
@@ -861,13 +988,21 @@ function App() {
                     </div>
 
                     <div className="space-y-2 pb-4">
-                      <div className="flex items-center gap-2">
-                        <label className="text-[9px] text-terminal-cyan/40 uppercase tracking-[0.2em] font-bold">Variations (One Per Line)</label>
-                        <button 
-                          onClick={() => setOpenHelp('variations')}
-                          className="text-[9px] text-terminal-cyan/60 hover:text-terminal-cyan underline cursor-pointer opacity-50 hover:opacity-100 transition-opacity"
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <label className="text-[9px] text-terminal-cyan/40 uppercase tracking-[0.2em] font-bold">Variations (One Per Line)</label>
+                          <button 
+                            onClick={() => setOpenHelp('variations')}
+                            className="text-[9px] text-terminal-cyan/60 hover:text-terminal-cyan underline cursor-pointer opacity-50 hover:opacity-100 transition-opacity"
+                          >
+                            [HELP]
+                          </button>
+                        </div>
+                        <button
+                          onClick={handleOpenVariationGenerator}
+                          className="text-[9px] font-bold tracking-widest border border-terminal-cyan/40 text-terminal-cyan px-2 py-1 hover:bg-terminal-cyan/10 transition-colors"
                         >
-                          [HELP]
+                          [AUTO_GENERATE]
                         </button>
                       </div>
                       <TerminalTextarea
@@ -891,6 +1026,26 @@ function App() {
                             className="border-terminal-cyan/20 bg-terminal-cyan/5 text-xs font-mono"
                           />
                           <p className="text-[8px] text-terminal-cyan/30 mt-1">Lower = Loose; Higher = Strict</p>
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[9px] text-terminal-cyan/40 block uppercase tracking-[0.2em] font-bold flex items-center gap-2">
+                            Similarity Threshold
+                            <span className="text-terminal-cyan/50 text-[8px] tracking-normal">(Dup filter)</span>
+                          </label>
+                          <TerminalInputField
+                            type="number"
+                            min="0"
+                            max="1"
+                            step="0.01"
+                            value={settings.similarityThreshold}
+                            onChange={(e) => setSettings(prev => ({
+                              ...prev,
+                              similarityThreshold: Math.min(1, Math.max(0, parseFloat(e.target.value) || 0))
+                            }))}
+                            disabled={isGenerating}
+                            className="border-terminal-cyan/20 bg-terminal-cyan/5 text-xs font-mono"
+                          />
+                          <p className="text-[8px] text-terminal-cyan/30 mt-1">Lower ⇒ more aggressive duplicate filtering.</p>
                         </div>
                         <div className="space-y-1">
                           <label className="text-[9px] text-terminal-cyan/40 uppercase tracking-[0.2em] font-bold flex items-center gap-2">
@@ -1173,6 +1328,126 @@ function App() {
                             <p className="opacity-60 text-[10px]">Helps prevent the model from getting stuck in repetitive loops by introducing mandatory creative constraints for each item.</p>
                           </div>
                         </div>
+                      </div>
+                    </TerminalCard>
+                  </NeonBorder>
+                </div>
+              </motion.div>
+            )}
+
+            {showVariationGenerator && (
+              <motion.div
+                key="variation-generator-panel"
+                initial={{ opacity: 0, width: 0, x: 20 }}
+                animate={{ opacity: 1, width: 360, x: 0 }}
+                exit={{ opacity: 0, width: 0, x: 20 }}
+                transition={sharedTransition}
+                className="shrink-0 overflow-hidden"
+              >
+                <div className="pl-6">
+                  <NeonBorder color="terminal-cyan">
+                    <TerminalCard 
+                      title="Variation_Forge"
+                      onClose={() => setShowVariationGenerator(false)}
+                      className="h-[700px] flex flex-col bg-[#050505] backdrop-blur-sm border-terminal-cyan/20 relative overflow-hidden group"
+                    >
+                      <div className="p-6 overflow-y-auto custom-scrollbar space-y-5 text-[11px] leading-relaxed">
+                        <div className="p-4 bg-terminal-cyan/5 border-l-4 border-terminal-cyan">
+                          <h4 className="text-terminal-cyan font-black uppercase tracking-tight text-xs mb-1">
+                            Auto Keyword Synthesizer
+                          </h4>
+                          <p className="opacity-70">
+                            Select a provider node and generate fresh variation keywords that will append to your existing list.
+                          </p>
+                        </div>
+
+                        <div className="space-y-3">
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase tracking-[0.2em] text-terminal-cyan/50 font-bold flex items-center justify-between">
+                              Provider Node
+                              <span className="text-terminal-cyan/40 text-[8px]">{providers.length} available</span>
+                            </label>
+                            <TerminalSelect
+                              value={variationGeneratorConfig.providerId}
+                              onChange={(e) => setVariationGeneratorConfig(prev => ({ ...prev, providerId: e.target.value }))}
+                              disabled={!providers.length || isGeneratingVariations}
+                              className="border-terminal-cyan/30 bg-terminal-cyan/5 text-[10px]"
+                            >
+                              {providers.map(node => (
+                                <option key={node.id} value={node.id}>
+                                  {node.name} · {node.provider}::{node.model}
+                                </option>
+                              ))}
+                            </TerminalSelect>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[9px] uppercase tracking-[0.2em] text-terminal-cyan/50 font-bold">Keyword Count</label>
+                              <TerminalInputField
+                                type="number"
+                                min="1"
+                                max="200"
+                                value={variationGeneratorConfig.count}
+                                onChange={(e) => setVariationGeneratorConfig(prev => ({ ...prev, count: Math.max(1, Math.min(200, parseInt(e.target.value) || 1)) }))}
+                                disabled={isGeneratingVariations}
+                                className="border-terminal-cyan/30 bg-terminal-cyan/5 text-xs"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[9px] uppercase tracking-[0.2em] text-terminal-cyan/50 font-bold">Status</label>
+                              <div className={cn(
+                                "text-[10px] font-mono border px-3 py-1",
+                                isGeneratingVariations ? "border-terminal-cyan/40 text-terminal-cyan" : "border-terminal-green/30 text-terminal-green/70"
+                              )}>
+                                {isGeneratingVariations ? 'SYNTHESIZING...' : 'IDLE'}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[9px] uppercase tracking-[0.2em] text-terminal-cyan/50 font-bold flex items-center gap-2">
+                              Variations Specific Prompt
+                              <span className="text-[8px] text-terminal-cyan/40">(Optional)</span>
+                            </label>
+                            <TerminalTextarea
+                              value={variationGeneratorConfig.prompt}
+                              onChange={(e) => setVariationGeneratorConfig(prev => ({ ...prev, prompt: e.target.value }))}
+                              disabled={isGeneratingVariations}
+                              className="h-32"
+                              placeholder="e.g. focus on neon-drenched city heists with synthwave mood"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex items-center pt-2">
+                          <TerminalButton
+                            onClick={handleGenerateVariations}
+                            disabled={isGeneratingVariations || !providers.length}
+                            className="w-full text-[10px]"
+                          >
+                            {isGeneratingVariations ? '[PROCESSING]' : '[GENERATE]'}
+                          </TerminalButton>
+                        </div>
+
+                        {recentGeneratedVariations.length > 0 && (
+                          <div className="border border-terminal-cyan/20 p-3 bg-black/40 space-y-2">
+                            <div className="flex items-center justify-between text-[9px] uppercase tracking-[0.2em] text-terminal-cyan/60 font-bold">
+                              <span>Recent Additions</span>
+                              <button
+                                onClick={() => setRecentGeneratedVariations([])}
+                                className="text-terminal-cyan/40 hover:text-terminal-cyan text-[8px]"
+                              >
+                                [CLEAR]
+                              </button>
+                            </div>
+                            <ul className="text-[10px] text-terminal-green/80 space-y-1 font-mono max-h-48 overflow-y-auto pr-1 custom-scrollbar slim-scrollbar">
+                              {recentGeneratedVariations.map((item, idx) => (
+                                <li key={`${item}-${idx}`}>• {item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
                       </div>
                     </TerminalCard>
                   </NeonBorder>

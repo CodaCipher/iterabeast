@@ -14,6 +14,11 @@ export function TacticalCursor() {
   const [isHovering, setIsHovering] = useState(false)
 
   useEffect(() => {
+    // Add global cursor style once to avoid heavy recalculations on component re-render
+    const globalStyle = document.createElement('style')
+    globalStyle.innerHTML = '* { cursor: none !important; }'
+    document.head.appendChild(globalStyle)
+
     const handleMouseMove = (e) => {
       // Update motion values directly
       mouseX.set(e.clientX)
@@ -48,6 +53,7 @@ export function TacticalCursor() {
     window.addEventListener('mouseup', handleMouseUp)
 
     return () => {
+      document.head.removeChild(globalStyle)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mousedown', handleMouseDown)
       window.removeEventListener('mouseup', handleMouseUp)
@@ -56,11 +62,6 @@ export function TacticalCursor() {
 
   return (
     <>
-      <style>{`
-        * {
-          cursor: none !important;
-        }
-      `}</style>
       <div className="fixed inset-0 pointer-events-none z-[9999] overflow-hidden">
         <motion.div
           className="absolute top-0 left-0 will-change-transform"

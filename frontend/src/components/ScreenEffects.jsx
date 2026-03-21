@@ -13,10 +13,12 @@ export function ScreenEffects() {
 
       {/* 2. Film Grain / Noise */}
       <div 
-        className="absolute inset-0 opacity-[0.03]"
+        className="absolute inset-0 opacity-[0.06]"
         style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")`,
-          filter: 'contrast(150%) brightness(100%)'
+          backgroundImage: `url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyBAMAAADsEZWCAAAAGFBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANYy0DAAAACHRSTlMAAAAAAAB/AAB+PZ4ZAAABEUlEQVQ4y+2UPQ7DMAiEHRnyl+u3X8tLhMhYqWJg8f8PRbGNVDF06hR5IAQ/YJkxxswxxsy/EWeM/fV2zBhj7X/njDF7TnfOGPvo2zFjzH10zjnjvN6OOeO8+nbMGOO13o4ZY7z22zFjzLvejjnjvOvtOGPMV2/HjDE+9XbMGONbb8eMMe71dswY47nfjjlj3PftmDHGfd+OGWPc9+2YMcZ9344ZY9z37Zgxxn3fjhlj3PftmDHGfd+OGWPc9+2YMcZ9344ZY9z37Zgxxn3fjhlj3PftmDHGfd+OGWPc9+2YMcZ9344ZY9z37Zgxxn3fjhlj3PftmDHGfd+OGWPc9+2YMcZ9344ZY9z37Zgxxn3fjvlLfwBi6wY9K5kH4gAAAABJRU5ErkJggg==")`,
+          backgroundRepeat: 'repeat',
+          backgroundSize: '100px 100px',
+          mixBlendMode: 'overlay'
         }}
       />
 

@@ -84,8 +84,9 @@ export function NeuralNetwork3D() {
 
     // Animation loop
     let time = 0
+    let animationFrameId
     const animate = () => {
-      requestAnimationFrame(animate)
+      animationFrameId = requestAnimationFrame(animate)
       time += 0.01
 
       // Update particle positions with simple wave motion
@@ -122,8 +123,24 @@ export function NeuralNetwork3D() {
     window.addEventListener('resize', handleResize)
 
     return () => {
+      cancelAnimationFrame(animationFrameId)
       window.removeEventListener('resize', handleResize)
-      containerRef.current?.removeChild(renderer.domElement)
+      
+      scene.traverse((object) => {
+        if (object.geometry) object.geometry.dispose()
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach(m => m.dispose())
+          } else {
+            object.material.dispose()
+          }
+        }
+      })
+      renderer.dispose()
+      
+      if (containerRef.current) {
+        containerRef.current.removeChild(renderer.domElement)
+      }
     }
   }, [])
 

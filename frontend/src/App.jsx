@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import axios from 'axios'
 import gsap from 'gsap'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -397,6 +397,8 @@ function App() {
       .filter(line => line.length > 0)
   }
 
+  const variationCount = useMemo(() => parseVariationList(settings.variations).length, [settings.variations])
+
   const sanitizeVariationKeyword = (value = '') => {
     let cleaned = value.trim()
     // Remove wrapping quotes/backticks repeatedly
@@ -557,22 +559,44 @@ function App() {
 
         const reader = response.body.getReader()
         const decoder = new TextDecoder()
-        const writable = await fileHandle.createWritable()
-        
+
+        // Ensure the selected file starts empty before streaming begins
+        const resetWritable = async () => {
+          const writer = await fileHandle.createWritable()
+          await writer.truncate(0)
+          await writer.close()
+        }
+        await resetWritable()
+
+        let bytesWritten = 0
+        const appendChunkToFile = async (chunk) => {
+          if (!chunk || !chunk.length) return
+          const writer = await fileHandle.createWritable({ keepExistingData: true })
+          await writer.seek(bytesWritten)
+          await writer.write(chunk)
+          await writer.close()
+          bytesWritten += chunk.byteLength || chunk.length
+        }
+
         let generatedCount = 0
+        let bufferedText = ''
         
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
           
-          await writable.write(value)
+          await appendChunkToFile(value)
           
           const chunk = decoder.decode(value, { stream: true })
-          const lines = chunk.split('\n').filter(l => l.trim())
+          const combined = bufferedText + chunk
+          const lines = combined.split('\n')
+          bufferedText = lines.pop() || ''
           
           for (const line of lines) {
+            const trimmed = line.trim()
+            if (!trimmed) continue
             try {
-              const parsed = JSON.parse(line)
+              const parsed = JSON.parse(trimmed)
               
               if (!parsed._error && parsed.messages) {
                 generatedCount++
@@ -585,8 +609,21 @@ function App() {
             current: Math.min(generatedCount, totalItems)
           }))
         }
-        
-        await writable.close()
+
+        // Handle any trailing buffered text (unlikely but safe)
+        if (bufferedText.trim()) {
+          try {
+            const parsed = JSON.parse(bufferedText.trim())
+            if (!parsed._error && parsed.messages) {
+              generatedCount++
+            }
+          } catch (e) {}
+          setProgress(prev => ({
+            ...prev,
+            current: Math.min(generatedCount, totalItems)
+          }))
+        }
+
         addTerminalOutput(`SUCCESS: Data streamed to ${fileHandle.name}`, 'success')
         
       } else {
@@ -1014,8 +1051,11 @@ function App() {
 
                     <div className="space-y-2 pb-4">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <label className="text-[9px] text-terminal-cyan/40 uppercase tracking-[0.2em] font-bold">Variations (One Per Line)</label>
+                          <span className="text-[8px] font-mono text-terminal-cyan/50">
+                            {variationCount} {variationCount === 1 ? 'entry' : 'entries'}
+                          </span>
                           <button 
                             onClick={() => setOpenHelp('variations')}
                             className="text-[9px] text-terminal-cyan/60 hover:text-terminal-cyan underline cursor-pointer opacity-50 hover:opacity-100 transition-opacity"

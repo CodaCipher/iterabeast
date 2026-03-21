@@ -156,8 +156,9 @@ export function InteractiveNeuralNetwork() {
 
     // Animation loop
     let time = 0
+    let animationFrameId
     const animate = () => {
-      requestAnimationFrame(animate)
+      animationFrameId = requestAnimationFrame(animate)
       time += 0.01
 
       // Rotate neural network slowly
@@ -221,11 +222,27 @@ export function InteractiveNeuralNetwork() {
     window.addEventListener('resize', handleResize)
 
     return () => {
+      cancelAnimationFrame(animationFrameId)
       window.removeEventListener('resize', handleResize)
       containerRef.current?.removeEventListener('mousemove', handleMouseMove)
       containerRef.current?.removeEventListener('mouseenter', handleMouseEnter)
       containerRef.current?.removeEventListener('mouseleave', handleMouseLeave)
-      containerRef.current?.removeChild(renderer.domElement)
+      
+      scene.traverse((object) => {
+        if (object.geometry) object.geometry.dispose()
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach(m => m.dispose())
+          } else {
+            object.material.dispose()
+          }
+        }
+      })
+      renderer.dispose()
+      
+      if (containerRef.current) {
+        containerRef.current.removeChild(renderer.domElement)
+      }
     }
   }, [isHovered])
 

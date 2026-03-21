@@ -148,8 +148,10 @@ export function HolographicGrid({ theme = 'magi' }) {
 
     // === ANIMATION LOOP ===
     let time = 0
+    let animationFrameId
+    
     const animate = () => {
-      requestAnimationFrame(animate)
+      animationFrameId = requestAnimationFrame(animate)
       time += 0.005
 
       // Core Mutation (Rotation)
@@ -196,7 +198,22 @@ export function HolographicGrid({ theme = 'magi' }) {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('resize', handleResize)
-      containerRef.current?.removeChild(renderer.domElement)
+      cancelAnimationFrame(animationFrameId)
+      
+      // Dispose Geometries and Materials to prevent memory leaks
+      coreGeo.dispose()
+      coreMat.dispose()
+      innerCoreGeo.dispose()
+      innerCoreMat.dispose()
+      particlesGeo.dispose()
+      particlesMat.dispose()
+      ringGeo.dispose()
+      ringMat.dispose()
+      
+      renderer.dispose()
+      if (containerRef.current) {
+        containerRef.current.removeChild(renderer.domElement)
+      }
     }
   }, [])
 

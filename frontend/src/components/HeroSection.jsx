@@ -47,6 +47,7 @@ export function HeroSection() {
       particles.push(new Particle())
     }
 
+    let animationFrameId
     const animate = () => {
       ctx.fillStyle = 'rgba(20, 10, 30, 0.1)'
       ctx.fillRect(0, 0, canvas.width, canvas.height)
@@ -56,7 +57,7 @@ export function HeroSection() {
         particle.draw()
       })
 
-      requestAnimationFrame(animate)
+      animationFrameId = requestAnimationFrame(animate)
     }
 
     animate()
@@ -67,7 +68,10 @@ export function HeroSection() {
     }
 
     window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      cancelAnimationFrame(animationFrameId)
+    }
   }, [])
 
   const containerVariants = {

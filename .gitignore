@@ -78,9 +78,12 @@ frontend/build/
 outputs/
 data/
 temp/
+backend/synth_data.jsonl
+backend/data.jsonl
 
 # External/manual data directories
 ../manueldatas/
+../ToDelete/
 
 # Large media files (Keep README assets, ignore raw recordings)
 *.mp4

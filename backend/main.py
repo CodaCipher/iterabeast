@@ -50,7 +50,7 @@ app.add_middleware(
 # Global constants and config
 EMBEDDING_MODEL = None
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.82"))
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.90"))
 ENABLE_SIMILARITY_CHECK = os.getenv("ENABLE_SIMILARITY_CHECK", "true").lower() not in {"false", "0", "no"}
 ENABLE_SEMANTIC_VARIATIONS = os.getenv("ENABLE_SEMANTIC_VARIATIONS", "true").lower() not in {"false", "0", "no"}
 SEMANTIC_KEYWORD_THRESHOLD = float(os.getenv("SEMANTIC_KEYWORD_THRESHOLD", "0.35"))
@@ -427,6 +427,18 @@ MODEL_PRICING = {
 }
 
 class ProviderHandler:
+    # Class-level semaphore pool to limit concurrent requests per base_url
+    _semaphore_pool: Dict[str, asyncio.Semaphore] = {}
+    _semaphore_lock = asyncio.Lock()
+    
+    @classmethod
+    async def _get_semaphore(cls, base_url: str) -> asyncio.Semaphore:
+        """Get or create a semaphore for a given base_url to limit concurrent requests."""
+        async with cls._semaphore_lock:
+            if base_url not in cls._semaphore_pool:
+                cls._semaphore_pool[base_url] = asyncio.Semaphore(1)
+            return cls._semaphore_pool[base_url]
+
     def __init__(self, config: ProviderConfig):
         self.config = config
         self.provider = config.provider
@@ -477,7 +489,10 @@ class ProviderHandler:
         log.model(f"Calling Ollama... ({self.config.model})", self.config.model)
         try:
             sess = await self._ensure_session()
-            async with sess.post(url, json=payload, timeout=300) as resp:
+            # Reduced timeout from 300 to 60 seconds to prevent workers from hanging indefinitely on stalled requests.
+            # Normal successful requests take ~10-15s, so 60s is plenty of headroom for normal operations,
+            # but fails fast enough to keep the worker pool moving if Ollama locks up.
+            async with sess.post(url, json=payload, timeout=60) as resp:
                     if resp.status == 200:
                         return (await resp.json()).get("response", "").strip()
                     log.error(f"Ollama reported error code: {resp.status}")
@@ -1327,10 +1342,16 @@ async def generate_synthetic_data(request: GenerationRequest):
         import time as _time
         _start_time = _time.monotonic()
 
-        async def generate_single(i):
-                # Pick handler using round-robin
-                handler = handlers[i % len(handlers)]
-                provider_index = i % len(handlers)
+        async def generate_single(i, forced_handler: Optional[ProviderHandler] = None):
+                # Pick handler using round-robin if forced_handler is not provided
+                if forced_handler:
+                    handler = forced_handler
+                    # provider_index is not strictly index anymore when forced, but we can fake it or find it
+                    provider_index = handlers.index(handler) if handler in handlers else (i % len(handlers))
+                else:
+                    handler = handlers[i % len(handlers)]
+                    provider_index = i % len(handlers)
+                    
                 item_num_for_provider = (i // len(handlers)) + 1
                 
                 # Distribution Strategy Logic
@@ -1474,62 +1495,158 @@ async def generate_synthetic_data(request: GenerationRequest):
                 log.error(f"#{i+1:>3} ABORT after {max_attempts} attempts.", "TASK")
                 return None, last_err, handler.model
 
+        # Use the output filename directly as the path (no "outputs/" prefix)
+        output_filepath = request.output_filename
+        with open(output_filepath, 'w', encoding='utf-8') as f:
+            pass # Just clear/create the file
+            
+        # File lock to prevent workers from corrupting the file with simultaneous writes
+        file_lock = asyncio.Lock()
+        
+        # Shared state for tracking progress across workers
+        shared_state = {
+            "generated": 0,
+            "errors": [],
+            "provider_stats": {}
+        }
+
+        # Queue implementation for asynchronous worker pool
+        queue = asyncio.Queue()
+        for i in range(total_tasks):
+            queue.put_nowait(i)
+
+        async def worker(handler_index: int, handler: ProviderHandler):
+            """Worker function that continuously pulls tasks from the queue and saves incrementally."""
+            while not queue.empty():
+                try:
+                    # Get next task index from queue
+                    i = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                
+                res, err, pmodel = None, None, handler.model
+                # Execute generation using THIS specific handler
+                try:
+                    res, err, pmodel = await generate_single(i, forced_handler=handler)
+                except Exception as e:
+                    log.error(f"Worker {handler.provider}::{handler.model} failed on task #{i+1}: {e}", "WORKER")
+                    err = str(e)
+                finally:
+                    queue.task_done()
+                    
+                # Incrementally save the result to the file using a lock
+                async with file_lock:
+                    if res:
+                        with open(output_filepath, 'a', encoding='utf-8') as f:
+                            f.write(res)
+                            f.flush()
+                            os.fsync(f.fileno())
+                        shared_state["generated"] += 1
+                        shared_state["provider_stats"][pmodel] = shared_state["provider_stats"].get(pmodel, 0) + 1
+                    else:
+                        shared_state["errors"].append(err)
+                    
+                    completed = shared_state["generated"] + len(shared_state["errors"])
+                    if completed % 10 == 0 or completed == total_tasks:
+                        log.info(f"Progress: {completed}/{total_tasks} completed ({shared_state['generated']} OK)", "SYSTEM")
+
         if request.stream:
+            # Note: Streaming with parallel workers requires complex queueing of results.
+            # We'll implement a simpler async execution but gather results.
+            # To maintain pure streaming, we could use an output queue, but for now
+            # we will just warn that stream mode might be slightly different in ordering.
             async def data_generator():
-                log.info(f"Stream open. Dispatching {total_tasks} tasks sequentially...", "SYSTEM")
+                log.info(f"Stream open. Dispatching {total_tasks} tasks across {len(active_providers)} workers...", "SYSTEM")
                 _ok = 0
                 _pstats: Dict[str, int] = {}
-                try:
-                    for i in range(total_tasks):
-                        res, err, pmodel = await generate_single(i)
-                        if res:
-                            _ok += 1
-                            _pstats[pmodel] = _pstats.get(pmodel, 0) + 1
-                            yield res
-                except Exception as e:
-                    log.error(f"Stream interrupted: {str(e)}", "HALT")
-                    _elapsed = _time.monotonic() - _start_time
-                    log.mission_complete(
-                        total=total_tasks,
-                        ok=_ok,
-                        failed=total_tasks - _ok,
-                        provider_stats=_pstats,
-                        elapsed_sec=_elapsed,
-                        output_path=request.output_filename,
-                        distribution=request.distribution_strategy,
-                    )
+                
+                # We need a shared output queue to stream results as they finish
+                output_queue = asyncio.Queue()
+                
+                # Use the output filename directly (no "outputs/" prefix)
+                with open(output_filepath, 'w', encoding='utf-8') as f:
+                    pass # Just clear/create the file
+                file_lock = asyncio.Lock()
+                
+                async def stream_worker(handler_index: int, handler: ProviderHandler):
+                    while not queue.empty():
+                        try:
+                            i = queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        try:
+                            res, err, pmodel = await generate_single(i, forced_handler=handler)
+                            
+                            # Incrementally save the result to the file during streaming
+                            async with file_lock:
+                                if res:
+                                    with open(output_filepath, 'a', encoding='utf-8') as f:
+                                        f.write(res)
+                                        f.flush()
+                                        os.fsync(f.fileno())
+                                        
+                            await output_queue.put((res, err, pmodel))
+                        except Exception as e:
+                            log.error(f"Stream worker {handler.provider} failed on task #{i+1}: {e}", "WORKER")
+                            await output_queue.put((None, str(e), handler.model))
+                        finally:
+                            queue.task_done()
+                
+                # Start workers
+                workers = [
+                    asyncio.create_task(stream_worker(idx, h)) 
+                    for idx, h in enumerate(handlers)
+                ]
+                
+                # Collect results as they arrive in the output queue
+                processed = 0
+                while processed < total_tasks:
+                    res, err, pmodel = await output_queue.get()
+                    if res:
+                        _ok += 1
+                        _pstats[pmodel] = _pstats.get(pmodel, 0) + 1
+                        yield res
+                    processed += 1
+                
+                # Wait for all workers to finish cleanly
+                await asyncio.gather(*workers)
+                
+                _elapsed = _time.monotonic() - _start_time
+                log.mission_complete(
+                    total=total_tasks,
+                    ok=_ok,
+                    failed=total_tasks - _ok,
+                    provider_stats=_pstats,
+                    elapsed_sec=_elapsed,
+                    output_path=request.output_filename,
+                    distribution="asynchronous worker pool",
+                )
             
             return StreamingResponse(data_generator(), media_type="application/x-ndjson")
 
-        # Batch mode: Sequential execution for stability
-        log.info(f"Batch mode. Dispatching {total_tasks} tasks sequentially...", "SYSTEM")
-        results = []
-        for i in range(total_tasks):
-            result = await generate_single(i)
-            results.append(result)
-            if (i + 1) % 10 == 0:
-                completed = sum(1 for r in results if r[0] is not None)
-                log.info(f"Progress: {i+1}/{total_tasks} completed ({completed} OK)", "SYSTEM")
+        # Batch mode: Asynchronous worker pool execution
+        log.info(f"Batch mode. Dispatching {total_tasks} tasks asynchronously across {len(active_providers)} workers...", "SYSTEM")
         
-        generated = 0
-        errors = []
-        provider_stats: Dict[str, int] = {}
-        os.makedirs("outputs", exist_ok=True)
-        with open(f"outputs/{request.output_filename}", 'w', encoding='utf-8') as f:
-            for res, err, pmodel in results:
-                if res:
-                    f.write(res)
-                    generated += 1
-                    provider_stats[pmodel] = provider_stats.get(pmodel, 0) + 1
-                else:
-                    errors.append(err)
+        # Start all workers concurrently
+        worker_tasks = [
+            asyncio.create_task(worker(idx, h)) 
+            for idx, h in enumerate(handlers)
+        ]
+        
+        # Wait for all workers to finish their queues
+        await asyncio.gather(*worker_tasks)
+        
+        # We don't need to gather results locally since they're written incrementally
+        generated = shared_state["generated"]
+        errors = shared_state["errors"]
+        provider_stats = shared_state["provider_stats"]
         
         elapsed = _time.monotonic() - _start_time
         log.mission_complete(
             total=total_tasks, ok=generated, failed=len(errors),
             provider_stats=provider_stats, elapsed_sec=elapsed,
-            output_path=f"outputs/{request.output_filename}",
-            distribution=request.distribution_strategy,
+            output_path=output_filepath,
+            distribution="asynchronous worker pool",
         )
         
         return GenerationResponse(

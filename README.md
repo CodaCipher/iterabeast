@@ -72,13 +72,13 @@ By leveraging a dual-node architecture (FastAPI backend + React frontend), it al
   <table>
     <tr>
       <td align="center" width="50%">
-        <img src="assets/IteraBeastGif1.gif" alt="IteraBeast Feature 1" width="100%" style="max-width: 400px; border-radius: 8px; height: 300px; object-fit: cover;" />
+        <img src="assets/IteraBeastGif1.gif" alt="IteraBeast Feature 1" width="100%" style="max-width: 400px; border-radius: 8px; object-fit: contain;" />
         <br />
         <br />
         <strong>Multi-Provider Integration & Node Configuration</strong>
       </td>
       <td align="center" width="50%">
-        <img src="assets/IteraBeastGif3.gif" alt="IteraBeast Feature 3" width="100%" style="max-width: 400px; border-radius: 8px; height: 300px; object-fit: cover;" />
+        <img src="assets/IteraBeastGif3.gif" alt="IteraBeast Feature 3" width="100%" style="max-width: 400px; border-radius: 8px; object-fit: contain;" />
         <br />
         <br />
         <strong>Semantic Variation System & Distribution Routing</strong>

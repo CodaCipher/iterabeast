@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=50&duration=3000&pause=1000&color=00FF88&center=true&vCenter=true&width=1000&lines=ITERABEAST;SYNTH_DATAGEN_ENGINE" alt="Typing SVG" />
+  <img src="https://readme-typing-svg.herokuapp.com?font=Orbitron&size=40&duration=3000&pause=1000&color=00FF88&center=true&vCenter=true&width=800&lines=ITERABEAST;SYNTH_DATAGEN_ENGINE" alt="Typing SVG" />
   
-  <img src="assets/IteraBeastGif2.gif" alt="IteraBeast Main Demo" width="100%" style="border-radius: 10px; box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);" />
+  <img src="assets/IteraBeastGif2.gif" alt="IteraBeast Main Demo" width="80%" style="border-radius: 10px; box-shadow: 0 0 20px rgba(0, 255, 136, 0.2);" />
 
   <p align="center">
     <br />

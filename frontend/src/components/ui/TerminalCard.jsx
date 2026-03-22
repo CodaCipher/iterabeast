@@ -153,7 +153,6 @@ export function TerminalSelect({ className, children, ...props }) {
         'font-mono text-sm',
         'focus:outline-none focus:border-terminal-green focus:bg-[#0f0f0a]',
         'transition-all duration-200',
-        'cursor-pointer',
         '[color-scheme:dark]',
         className
       )}

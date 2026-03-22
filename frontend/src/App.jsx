@@ -1058,7 +1058,7 @@ function App() {
                           </span>
                           <button 
                             onClick={() => setOpenHelp('variations')}
-                            className="text-[9px] text-terminal-cyan/60 hover:text-terminal-cyan underline cursor-pointer opacity-50 hover:opacity-100 transition-opacity"
+                            className="text-[9px] text-terminal-cyan/60 hover:text-terminal-cyan underline opacity-50 hover:opacity-100 transition-opacity"
                           >
                             [HELP]
                           </button>

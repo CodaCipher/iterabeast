@@ -250,7 +250,7 @@ export function InteractiveNeuralNetwork() {
     <div
       ref={containerRef}
       className="w-full h-full absolute inset-0 pointer-events-auto"
-      style={{ opacity: 0.7, cursor: 'crosshair' }}
+      style={{ opacity: 0.7 }}
     />
   )
 }

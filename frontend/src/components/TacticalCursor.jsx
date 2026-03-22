@@ -14,10 +14,10 @@ export function TacticalCursor() {
   const [isHovering, setIsHovering] = useState(false)
 
   useEffect(() => {
-    // Add global cursor style once to avoid heavy recalculations on component re-render
-    const globalStyle = document.createElement('style')
-    globalStyle.innerHTML = '* { cursor: none !important; }'
-    document.head.appendChild(globalStyle)
+    // We remove the global * { cursor: none !important; } style here.
+    // Let's use standard CSS or Tailwind classes on body or specific elements instead 
+    // to avoid overriding cursors globally and causing huge default cursors to appear 
+    // due to conflicting global styles or OS-level cursor settings on some machines.
 
     const handleMouseMove = (e) => {
       // Update motion values directly
@@ -53,7 +53,6 @@ export function TacticalCursor() {
     window.addEventListener('mouseup', handleMouseUp)
 
     return () => {
-      document.head.removeChild(globalStyle)
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mousedown', handleMouseDown)
       window.removeEventListener('mouseup', handleMouseUp)

@@ -94,6 +94,12 @@
     -moz-osx-font-smoothing: grayscale;
     letter-spacing: 0.05em;
     line-height: 1.6;
+    cursor: none;
+  }
+
+  /* Make sure all interactive elements also hide cursor to let TacticalCursor handle it */
+  a, button, input, select, textarea {
+    cursor: none !important;
   }
 
   /* Text Selection Styles */

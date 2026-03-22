@@ -88,18 +88,18 @@
     @apply border-border;
     cursor: none !important;
   }
-  body {
+  body, html {
     @apply bg-background text-foreground;
     font-family: 'Fira Code', 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     letter-spacing: 0.05em;
     line-height: 1.6;
-    cursor: none;
+    cursor: none !important;
   }
 
   /* Make sure all interactive elements also hide cursor to let TacticalCursor handle it */
-  a, button, input, select, textarea {
+  a, button, input, select, textarea, div, span, p, label {
     cursor: none !important;
   }
 

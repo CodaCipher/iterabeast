@@ -96,7 +96,9 @@ By leveraging a dual-node architecture (FastAPI backend + React frontend), it al
 ```bash
 cd backend
 python -m venv .venv
-source .venv/Scripts/activate  # Windows
+# Activate virtual environment:
+.venv\Scripts\activate      # Windows (Command Prompt)
+# .\.venv\Scripts\Activate.ps1 # Windows (PowerShell)
 # source .venv/bin/activate    # Linux/Mac
 pip install -r requirements.txt
 python main.py
